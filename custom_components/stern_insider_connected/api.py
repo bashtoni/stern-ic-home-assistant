@@ -72,8 +72,13 @@ class SternInsiderConnectedAPI:
 
     async def authenticate(self) -> bool:
         """Authenticate with the Stern API via website login."""
-        session = await self._ensure_session()
+        # Use a fresh session for auth to avoid cookie/redirect issues
+        # with Home Assistant's shared session
+        async with aiohttp.ClientSession() as auth_session:
+            return await self._do_authenticate(auth_session)
 
+    async def _do_authenticate(self, session: aiohttp.ClientSession) -> bool:
+        """Perform the actual authentication request."""
         # Headers required for Next.js server action
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
