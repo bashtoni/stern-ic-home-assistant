@@ -122,13 +122,18 @@ class SternInsiderConnectedAPI:
                     except (json.JSONDecodeError, AttributeError):
                         pass
 
+                _LOGGER.debug(
+                    "Auth response: status=%s, authenticated=%s, has_token=%s, cookies_count=%d",
+                    response.status, authenticated, token is not None, len(cookies)
+                )
+
                 if response.status == 200 and (authenticated or token):
                     self._access_token = token
                     self._cookies = cookies
                     # Token expires in 30 minutes
                     self._token_expiry = time.time() + 1800
 
-                    _LOGGER.debug("Successfully authenticated with Stern API")
+                    _LOGGER.info("Successfully authenticated with Stern API")
                     return True
 
                 if response.status == 401:
@@ -136,6 +141,10 @@ class SternInsiderConnectedAPI:
                 if response.status == 403:
                     raise SternAuthenticationError("Account access denied")
 
+                _LOGGER.error(
+                    "Authentication failed - status=%s, authenticated=%s, has_token=%s",
+                    response.status, authenticated, token is not None
+                )
                 raise SternAuthenticationError(
                     f"Authentication failed - status {response.status}, authenticated={authenticated}, has_token={token is not None}"
                 )
@@ -279,6 +288,8 @@ class SternInsiderConnectedAPI:
         """Validate the provided credentials."""
         try:
             await self.authenticate()
+            _LOGGER.info("Credentials validated successfully")
             return True
-        except SternAuthenticationError:
+        except SternAuthenticationError as err:
+            _LOGGER.warning("Credential validation failed: %s", err)
             return False

@@ -90,6 +90,7 @@ class SternInsiderConnectedConfigFlow(ConfigFlow, domain=DOMAIN):
         reauth_entry = self._get_reauth_entry()
 
         if user_input is not None:
+            _LOGGER.debug("Reauth attempt for user: %s", reauth_entry.data[CONF_USERNAME])
             session = async_get_clientsession(self.hass)
             api = SternInsiderConnectedAPI(
                 username=reauth_entry.data[CONF_USERNAME],
@@ -98,7 +99,10 @@ class SternInsiderConnectedConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
             try:
-                if await api.validate_credentials():
+                result = await api.validate_credentials()
+                _LOGGER.debug("Reauth validate_credentials returned: %s", result)
+                if result:
+                    _LOGGER.info("Reauth successful, updating entry")
                     return self.async_update_reload_and_abort(
                         reauth_entry,
                         data={
@@ -106,10 +110,13 @@ class SternInsiderConnectedConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_PASSWORD: user_input[CONF_PASSWORD],
                         },
                     )
+                _LOGGER.warning("Reauth failed - validate_credentials returned False")
                 errors["base"] = "invalid_auth"
-            except SternAuthenticationError:
+            except SternAuthenticationError as err:
+                _LOGGER.warning("Reauth failed with auth error: %s", err)
                 errors["base"] = "invalid_auth"
-            except SternConnectionError:
+            except SternConnectionError as err:
+                _LOGGER.warning("Reauth failed with connection error: %s", err)
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected exception during reauth")
