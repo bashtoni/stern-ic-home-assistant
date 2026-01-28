@@ -221,15 +221,20 @@ class SternInsiderConnectedAPI:
         machines_list = user_data.get("machines", data.get("machines", []))
 
         for item in machines_list:
-            # Get model info for game title
+            # Get model and title info
             model = item.get("model", {})
-            game_title = model.get("name", item.get("name", "Unknown"))
+            title = model.get("title", {})
+            game_title = title.get("name", "Unknown")
+
+            # Use location name as machine name, or fall back to game title
+            address = item.get("address", {})
+            location_name = address.get("location_name", "")
 
             machine = Machine(
                 machine_id=str(item.get("id", "")),
-                name=item.get("nickname", item.get("name", game_title)),
+                name=location_name or game_title,
                 game_title=game_title,
-                image_url=model.get("image_url", item.get("image_url")),
+                image_url=title.get("default_backglass_image") or title.get("square_logo"),
             )
             machines.append(machine)
 
@@ -241,27 +246,28 @@ class SternInsiderConnectedAPI:
         data = await self._request("GET", url)
 
         high_scores = []
-        # Response can be a list directly or have a wrapper
-        scores_list: list[dict[str, Any]] = (
-            data if isinstance(data, list) else data.get("high_scores", data.get("scores", []))
-        )
+        # Response has "high_score" key (singular)
+        scores_list: list[dict[str, Any]] = data.get("high_score", [])
 
         for idx, item in enumerate(scores_list):
             # Get user info
             user: dict[str, Any] = item.get("user", {})
+            # Score is a string in the API response
+            score_value = item.get("score", "0")
+            if isinstance(score_value, str):
+                score_value = int(score_value) if score_value.isdigit() else 0
+
             score = HighScore(
-                score_id=str(item.get("id", "")),
-                rank=item.get("rank", item.get("position", idx + 1)),
-                score=int(item.get("score", 0)),
-                player_name=user.get("full_name", user.get("username", "Unknown")),
+                score_id=str(idx + 1),
+                rank=idx + 1,
+                score=score_value,
+                player_name=user.get("username", "Unknown"),
                 player_username=user.get("username", ""),
-                player_initials=item.get("initials", user.get("initials", "???")),
-                avatar_url=user.get("avatar_url"),
+                player_initials=user.get("initials", "???"),
+                avatar_url=user.get("avatar_url") or None,
             )
             high_scores.append(score)
 
-        # Sort by rank and limit to top 5
-        high_scores.sort(key=lambda x: x.rank)
         return high_scores[:5]
 
     async def get_teams(self) -> list[Team]:
