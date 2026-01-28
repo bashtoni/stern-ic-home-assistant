@@ -97,6 +97,7 @@ class SternLeaderboardCard extends HTMLElement {
         <style>
           .stern-card {
             padding: 16px;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
           }
           .stern-header {
             display: flex;
@@ -161,7 +162,7 @@ class SternLeaderboardCard extends HTMLElement {
             ${machine.scores.map(score => `
               <div class="stern-score-row ${score.rank === 1 ? 'stern-gc' : ''}">
                 <div class="stern-rank">${showRankNames ? this._getRankName(score.rank) : '#' + score.rank}</div>
-                <div class="stern-initials">${score.initials}</div>
+                <div class="stern-initials">${score.initials.toUpperCase()}</div>
                 <div class="stern-score-value">${this._formatScore(score.score)}</div>
               </div>
             `).join('')}

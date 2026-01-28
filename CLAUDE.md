@@ -41,3 +41,12 @@ custom_components/
 
 - Use pytest with pytest-homeassistant-custom-component
 - Test coverage for API client, coordinator, and config flow
+
+## Releasing
+
+To create a new release:
+
+1. **Update version in manifest.json** - Bump the `version` field in `custom_components/stern_insider_connected/manifest.json`
+2. **Commit changes** - `git commit -a -m "Release vX.Y.Z"`
+3. **Create and push tag** - `git tag vX.Y.Z && git push && git push --tags`
+4. **Create GitHub release** - Use `gh release create vX.Y.Z --generate-notes` to create the release with auto-generated release notes
