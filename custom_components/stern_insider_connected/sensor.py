@@ -79,12 +79,7 @@ class SternHighScoreSensor(CoordinatorEntity[SternInsiderConnectedCoordinator], 
 
     @property
     def name(self) -> str:
-        """Return the name of the sensor including player initials."""
-        machine = self._machine
-        if machine and machine.high_scores:
-            for score in machine.high_scores:
-                if score.rank == self._rank and score.player_initials:
-                    return f"{self._rank_name} ({score.player_initials})"
+        """Return the name of the sensor."""
         return self._rank_name
 
     @property
