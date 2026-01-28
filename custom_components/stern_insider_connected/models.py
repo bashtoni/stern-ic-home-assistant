@@ -24,6 +24,12 @@ class Machine:
     name: str
     game_title: str
     image_url: str | None = None
+    square_logo_url: str | None = None
+    variable_width_logo_url: str | None = None
+    backglass_image_url: str | None = None
+    background_image_url: str | None = None
+    gradient_start: str | None = None
+    gradient_stop: str | None = None
     high_scores: list[HighScore] = field(default_factory=list)
 
 

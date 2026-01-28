@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -18,6 +20,22 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Stern Insider Connected from a config entry."""
+    # Register frontend card static path (once)
+    if DOMAIN not in hass.data:
+        www_path = Path(__file__).parent / "www"
+        if www_path.exists():
+            await hass.http.async_register_static_paths([
+                StaticPathConfig(
+                    f"/{DOMAIN}",
+                    str(www_path),
+                    cache_headers=False,
+                )
+            ])
+            _LOGGER.info(
+                "Registered Stern Leaderboard card at /%s/stern-leaderboard-card.js",
+                DOMAIN
+            )
+
     coordinator = SternInsiderConnectedCoordinator(hass, entry)
 
     # Fetch initial data

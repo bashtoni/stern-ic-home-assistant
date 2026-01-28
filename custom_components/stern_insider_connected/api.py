@@ -231,6 +231,12 @@ class SternInsiderConnectedAPI:
                 name=game_title,
                 game_title=game_title,
                 image_url=title.get("default_backglass_image") or title.get("square_logo"),
+                square_logo_url=title.get("square_logo"),
+                variable_width_logo_url=title.get("variable_width_logo"),
+                backglass_image_url=title.get("default_backglass_image"),
+                background_image_url=title.get("primary_background"),
+                gradient_start=title.get("gradient_start"),
+                gradient_stop=title.get("gradient_stop"),
             )
             machines.append(machine)
 

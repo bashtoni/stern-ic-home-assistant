@@ -105,6 +105,13 @@ class SternHighScoreSensor(CoordinatorEntity[SternInsiderConnectedCoordinator], 
             "rank": self._rank,
             "machine_name": machine.name,
             "machine_id": machine.machine_id,
+            "game_title": machine.game_title,
+            "square_logo_url": machine.square_logo_url,
+            "variable_width_logo_url": machine.variable_width_logo_url,
+            "backglass_image_url": machine.backglass_image_url,
+            "background_image_url": machine.background_image_url,
+            "gradient_start": machine.gradient_start,
+            "gradient_stop": machine.gradient_stop,
         }
 
         # Find the specific high score for this rank
