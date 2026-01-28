@@ -57,11 +57,10 @@ class SternHighScoreSensor(CoordinatorEntity[SternInsiderConnectedCoordinator], 
         super().__init__(coordinator)
         self._machine_id = machine.machine_id
         self._rank = rank
+        self._rank_name = HIGH_SCORE_NAMES[rank]
 
         # Entity identifiers
         self._attr_unique_id = f"{machine.machine_id}_high_score_{rank}"
-        self._attr_translation_key = "high_score"
-        self._attr_translation_placeholders = {"rank_name": HIGH_SCORE_NAMES[rank]}
 
         # Device info - each machine is a device
         self._attr_device_info = DeviceInfo(
@@ -77,6 +76,16 @@ class SternHighScoreSensor(CoordinatorEntity[SternInsiderConnectedCoordinator], 
         if self.coordinator.data:
             return self.coordinator.data.get(self._machine_id)
         return None
+
+    @property
+    def name(self) -> str:
+        """Return the name of the sensor including player initials."""
+        machine = self._machine
+        if machine and machine.high_scores:
+            for score in machine.high_scores:
+                if score.rank == self._rank and score.player_initials:
+                    return f"{self._rank_name} ({score.player_initials})"
+        return self._rank_name
 
     @property
     def native_value(self) -> int | None:

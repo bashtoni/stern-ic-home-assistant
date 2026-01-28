@@ -226,13 +226,9 @@ class SternInsiderConnectedAPI:
             title = model.get("title", {})
             game_title = title.get("name", "Unknown")
 
-            # Use location name as machine name, or fall back to game title
-            address = item.get("address", {})
-            location_name = address.get("location_name", "")
-
             machine = Machine(
                 machine_id=str(item.get("id", "")),
-                name=location_name or game_title,
+                name=game_title,
                 game_title=game_title,
                 image_url=title.get("default_backglass_image") or title.get("square_logo"),
             )
