@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -47,6 +49,7 @@ class SternInsiderConnectedAPI:
         self._session = session
         self._owns_session = session is None
         self._access_token: str | None = None
+        self._cookies: list[str] = []
         self._token_expiry: float = 0
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
@@ -68,34 +71,74 @@ class SternInsiderConnectedAPI:
         return time.time() < (self._token_expiry - TOKEN_EXPIRY_BUFFER)
 
     async def authenticate(self) -> bool:
-        """Authenticate with the Stern API."""
+        """Authenticate with the Stern API via website login."""
         session = await self._ensure_session()
+
+        # Headers required for Next.js server action
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
+            "Accept": "text/x-component",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://insider.sternpinball.com/login",
+            "Next-Action": "9d2cf818afff9e2c69368771b521d93585a10433",
+            "Next-Router-State-Tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22login%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2Flogin%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D",
+            "Content-Type": "text/plain;charset=UTF-8",
+            "Origin": "https://insider.sternpinball.com",
+        }
+
+        # Login data sent as JSON array (not object)
+        login_data = json.dumps([self._username, self._password])
 
         try:
             async with session.post(
                 API_LOGIN_URL,
-                json={"username": self._username, "password": self._password},
+                headers=headers,
+                data=login_data,
+                allow_redirects=False,
             ) as response:
+                # Extract token from cookies
+                token = None
+                cookies = response.headers.getall("Set-Cookie", [])
+                for cookie in cookies:
+                    if "spb-insider-token=" in cookie:
+                        # Extract token value
+                        match = re.search(r"spb-insider-token=([^;]+)", cookie)
+                        if match:
+                            token = match.group(1)
+                            break
+
+                # Check response body for authentication status
+                response_text = await response.text()
+                authenticated = False
+                if '"authenticated"' in response_text:
+                    try:
+                        for line in response_text.split("\n"):
+                            if '"authenticated"' in line:
+                                json_match = re.search(r"\{.*\}", line)
+                                if json_match:
+                                    auth_result = json.loads(json_match.group(0))
+                                    authenticated = auth_result.get("authenticated", False)
+                                    break
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+
+                if response.status == 200 and (authenticated or token):
+                    self._access_token = token
+                    self._cookies = cookies
+                    # Token expires in 30 minutes
+                    self._token_expiry = time.time() + 1800
+
+                    _LOGGER.debug("Successfully authenticated with Stern API")
+                    return True
+
                 if response.status == 401:
                     raise SternAuthenticationError("Invalid username or password")
                 if response.status == 403:
                     raise SternAuthenticationError("Account access denied")
-                if response.status != 200:
-                    raise SternAPIError(
-                        f"Authentication failed with status {response.status}"
-                    )
 
-                data = await response.json()
-                self._access_token = data.get("accessToken") or data.get("access_token")
-                if not self._access_token:
-                    raise SternAPIError("No access token in response")
-
-                # Token typically expires in 30 minutes
-                expires_in = data.get("expiresIn", data.get("expires_in", 1800))
-                self._token_expiry = time.time() + expires_in
-
-                _LOGGER.debug("Successfully authenticated with Stern API")
-                return True
+                raise SternAuthenticationError(
+                    f"Authentication failed - status {response.status}, authenticated={authenticated}, has_token={token is not None}"
+                )
 
         except aiohttp.ClientError as err:
             raise SternConnectionError(f"Failed to connect to Stern API: {err}") from err
@@ -105,18 +148,30 @@ class SternInsiderConnectedAPI:
         if not self._is_token_valid():
             await self.authenticate()
 
+    def _get_api_headers(self) -> dict[str, str]:
+        """Get headers for API requests."""
+        return {
+            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://insider.sternpinball.com/",
+            "Content-Type": "application/json",
+            "Origin": "https://insider.sternpinball.com",
+            "Authorization": f"Bearer {self._access_token}",
+        }
+
     async def _request(
         self,
         method: str,
         url: str,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Make an authenticated request to the API."""
         await self._ensure_authenticated()
         session = await self._ensure_session()
 
-        headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {self._access_token}"
+        headers = self._get_api_headers()
+        headers.update(kwargs.pop("headers", {}))
 
         try:
             async with session.request(method, url, headers=headers, **kwargs) as response:
@@ -143,15 +198,24 @@ class SternInsiderConnectedAPI:
 
     async def get_machines(self) -> list[Machine]:
         """Get all machines for the authenticated user."""
-        data = await self._request("GET", API_MACHINES_URL)
+        url = f"{API_MACHINES_URL}?group_type=home"
+        data = await self._request("GET", url)
 
         machines = []
-        for item in data.get("machines", data if isinstance(data, list) else []):
+        # Response format: {"user": {"machines": [...]}}
+        user_data = data.get("user", {})
+        machines_list = user_data.get("machines", data.get("machines", []))
+
+        for item in machines_list:
+            # Get model info for game title
+            model = item.get("model", {})
+            game_title = model.get("name", item.get("name", "Unknown"))
+
             machine = Machine(
-                machine_id=str(item.get("id", item.get("machineId", ""))),
-                name=item.get("name", item.get("machineName", "Unknown")),
-                game_title=item.get("gameTitle", item.get("game_title", "Unknown")),
-                image_url=item.get("imageUrl", item.get("image_url")),
+                machine_id=str(item.get("id", "")),
+                name=item.get("nickname", item.get("name", game_title)),
+                game_title=game_title,
+                image_url=model.get("image_url", item.get("image_url")),
             )
             machines.append(machine)
 
@@ -159,21 +223,26 @@ class SternInsiderConnectedAPI:
 
     async def get_high_scores(self, machine_id: str) -> list[HighScore]:
         """Get high scores for a specific machine."""
-        url = API_HIGH_SCORES_URL.format(machine_id=machine_id)
+        url = f"{API_HIGH_SCORES_URL}?machine_id={machine_id}"
         data = await self._request("GET", url)
 
         high_scores = []
-        scores_list = data.get("highScores", data.get("scores", data if isinstance(data, list) else []))
+        # Response can be a list directly or have a wrapper
+        scores_list: list[dict[str, Any]] = (
+            data if isinstance(data, list) else data.get("high_scores", data.get("scores", []))
+        )
 
-        for item in scores_list:
+        for idx, item in enumerate(scores_list):
+            # Get user info
+            user: dict[str, Any] = item.get("user", {})
             score = HighScore(
-                score_id=str(item.get("id", item.get("scoreId", ""))),
-                rank=item.get("rank", item.get("position", 0)),
+                score_id=str(item.get("id", "")),
+                rank=item.get("rank", item.get("position", idx + 1)),
                 score=int(item.get("score", 0)),
-                player_name=item.get("playerName", item.get("player_name", "Unknown")),
-                player_username=item.get("playerUsername", item.get("username", "")),
-                player_initials=item.get("playerInitials", item.get("initials", "???")),
-                avatar_url=item.get("avatarUrl", item.get("avatar_url")),
+                player_name=user.get("full_name", user.get("username", "Unknown")),
+                player_username=user.get("username", ""),
+                player_initials=item.get("initials", user.get("initials", "???")),
+                avatar_url=user.get("avatar_url"),
             )
             high_scores.append(score)
 

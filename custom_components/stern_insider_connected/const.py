@@ -5,11 +5,13 @@ from typing import Final
 DOMAIN: Final = "stern_insider_connected"
 
 # API URLs
-API_BASE_URL: Final = "https://api.sternpinball.com"
-API_LOGIN_URL: Final = f"{API_BASE_URL}/api/login"
-API_MACHINES_URL: Final = f"{API_BASE_URL}/api/machines"
-API_HIGH_SCORES_URL: Final = f"{API_BASE_URL}/api/venuemachines/{{machine_id}}/highscores"
-API_TEAMS_URL: Final = f"{API_BASE_URL}/api/teams"
+API_LOGIN_URL: Final = "https://insider.sternpinball.com/login"
+API_BASE_URL: Final = "https://cms.prd.sternpinball.io/api/v1/portal"
+API_GAME_TEAMS_URL: Final = "https://api.prd.sternpinball.io/api/v1/portal"
+API_MACHINES_URL: Final = f"{API_BASE_URL}/user_registered_machines/"
+API_MACHINE_DETAILS_URL: Final = f"{API_BASE_URL}/game_machines/{{machine_id}}"
+API_HIGH_SCORES_URL: Final = f"{API_BASE_URL}/game_machine_high_scores/"
+API_TEAMS_URL: Final = f"{API_GAME_TEAMS_URL}/game_teams/"
 
 # Configuration keys
 CONF_USERNAME: Final = "username"
