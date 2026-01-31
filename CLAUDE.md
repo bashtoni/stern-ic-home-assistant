@@ -46,7 +46,7 @@ custom_components/
 
 To create a new release:
 
-1. **Update version in manifest.json** - Bump the `version` field in `custom_components/stern_insider_connected/manifest.json`
+1. **Update version in manifest.json and pyproject.toml** - Bump the `version` field in `custom_components/stern_insider_connected/manifest.json` and `pyproject.toml`
 2. **Commit changes** - `git commit -a -m "Release vX.Y.Z"`
 3. **Create and push tag** - `git tag vX.Y.Z && git push && git push --tags`
 4. **Create GitHub release** - Use `gh release create vX.Y.Z --generate-notes` to create the release with auto-generated release notes

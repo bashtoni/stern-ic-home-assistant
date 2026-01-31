@@ -1,6 +1,6 @@
 [project]
 name = "stern-insider-connected"
-version = "0.0.1"
+version = "0.0.9"
 description = "Home Assistant custom integration for Stern Insider Connected pinball leaderboards"
 readme = "README.md"
 requires-python = ">=3.12"
