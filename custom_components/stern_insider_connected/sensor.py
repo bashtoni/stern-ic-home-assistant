@@ -24,10 +24,14 @@ async def async_setup_entry(
     """Set up Stern Insider Connected sensors from a config entry."""
     coordinator: SternInsiderConnectedCoordinator = hass.data[DOMAIN][entry.entry_id]
 
+    # Track which machine IDs have sensors created
+    known_machine_ids: set[str] = set()
+
     entities: list[SternHighScoreSensor] = []
 
     # Create sensors for each machine and each high score rank
     for machine in coordinator.data.values():
+        known_machine_ids.add(machine.machine_id)
         for rank in range(1, HIGH_SCORE_COUNT + 1):
             entities.append(
                 SternHighScoreSensor(
@@ -38,6 +42,30 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+
+    @callback
+    def async_check_new_machines() -> None:
+        """Check for new machines and add sensors."""
+        new_machines = [
+            m for m in coordinator.data.values()
+            if m.machine_id not in known_machine_ids
+        ]
+        if new_machines:
+            new_entities: list[SternHighScoreSensor] = []
+            for machine in new_machines:
+                known_machine_ids.add(machine.machine_id)
+                for rank in range(1, HIGH_SCORE_COUNT + 1):
+                    new_entities.append(
+                        SternHighScoreSensor(
+                            coordinator=coordinator,
+                            machine=machine,
+                            rank=rank,
+                        )
+                    )
+            async_add_entities(new_entities)
+
+    # Register listener to detect new machines on coordinator refresh
+    entry.async_on_unload(coordinator.async_add_listener(async_check_new_machines))
 
 
 class SternHighScoreSensor(CoordinatorEntity[SternInsiderConnectedCoordinator], SensorEntity):
