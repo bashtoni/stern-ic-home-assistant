@@ -31,8 +31,8 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
         _LOGGER.debug("Lovelace not available, skipping resource registration")
         return
 
-    resources: ResourceStorageCollection | None = lovelace_data.get("resources")
-    if resources is None:
+    resources = getattr(lovelace_data, "resources", None)
+    if not isinstance(resources, ResourceStorageCollection):
         _LOGGER.debug("Lovelace not in storage mode, manual resource registration required")
         return
 
