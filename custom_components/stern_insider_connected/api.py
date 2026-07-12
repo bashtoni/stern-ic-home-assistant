@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
@@ -21,6 +22,14 @@ from .models import HighScore, Machine, Team, TeamMember
 
 _LOGGER = logging.getLogger(__name__)
 
+_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0"
+_LOGIN_SCRIPT_PATTERN = re.compile(
+    r'<script\b[^>]*\bsrc=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', re.IGNORECASE
+)
+_LOGIN_ACTION_PATTERN = re.compile(
+    r'createServerReference\)\(\s*"([0-9a-f]{40,64})"[^)]*?"performLogin"\s*\)'
+)
+
 
 class SternAPIError(Exception):
     """Base exception for Stern API errors."""
@@ -32,6 +41,10 @@ class SternAuthenticationError(SternAPIError):
 
 class SternConnectionError(SternAPIError):
     """Connection to API failed."""
+
+
+class _StaleLoginActionError(Exception):
+    """The cached Stern login server action is no longer valid."""
 
 
 class SternInsiderConnectedAPI:
@@ -51,6 +64,7 @@ class SternInsiderConnectedAPI:
         self._access_token: str | None = None
         self._cookies: list[str] = []
         self._token_expiry: float = 0
+        self._login_action: str | None = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure we have a valid session."""
@@ -72,21 +86,88 @@ class SternInsiderConnectedAPI:
 
     async def authenticate(self) -> bool:
         """Authenticate with the Stern API via website login."""
-        # Use a fresh session for auth to avoid cookie/redirect issues
-        # with Home Assistant's shared session
-        async with aiohttp.ClientSession() as auth_session:
-            return await self._do_authenticate(auth_session)
+        try:
+            # Use a fresh session for auth to avoid cookie/redirect issues
+            # with Home Assistant's shared session.
+            async with aiohttp.ClientSession() as auth_session:
+                login_action = await self._get_login_action(auth_session)
+                try:
+                    return await self._do_authenticate(auth_session, login_action)
+                except _StaleLoginActionError:
+                    _LOGGER.info("Stern login action changed; rediscovering it")
+                    login_action = await self._get_login_action(auth_session, force_refresh=True)
+                    try:
+                        return await self._do_authenticate(auth_session, login_action)
+                    except _StaleLoginActionError as err:
+                        raise SternConnectionError(
+                            "Stern login returned an unexpected response"
+                        ) from err
+        except aiohttp.ClientError as err:
+            raise SternConnectionError(f"Failed to connect to Stern API: {err}") from err
 
-    async def _do_authenticate(self, session: aiohttp.ClientSession) -> bool:
+    async def _get_login_action(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
+        """Return the current Stern login server action."""
+        if self._login_action is not None and not force_refresh:
+            return self._login_action
+
+        self._login_action = await self._discover_login_action(session)
+        return self._login_action
+
+    async def _discover_login_action(self, session: aiohttp.ClientSession) -> str:
+        """Discover the current login action from Stern's Next.js bundles."""
+        async with session.get(
+            API_LOGIN_URL,
+            headers={"Accept": "text/html", "User-Agent": _USER_AGENT},
+        ) as response:
+            if response.status != 200:
+                raise SternConnectionError(
+                    f"Failed to load Stern login page - status {response.status}"
+                )
+            login_page = await response.text()
+
+        login_origin = urlparse(API_LOGIN_URL)
+        script_urls: list[str] = []
+        for script_path in _LOGIN_SCRIPT_PATTERN.findall(login_page):
+            script_url = urljoin(API_LOGIN_URL, script_path)
+            parsed_url = urlparse(script_url)
+            if (
+                parsed_url.scheme == login_origin.scheme
+                and parsed_url.netloc == login_origin.netloc
+                and parsed_url.path.startswith("/_next/static/chunks/")
+                and parsed_url.path.endswith(".js")
+                and script_url not in script_urls
+            ):
+                script_urls.append(script_url)
+
+        for script_url in script_urls:
+            try:
+                async with session.get(script_url) as response:
+                    if response.status != 200:
+                        continue
+                    script = await response.text()
+            except aiohttp.ClientError:
+                continue
+
+            if match := _LOGIN_ACTION_PATTERN.search(script):
+                _LOGGER.debug("Discovered current Stern login action")
+                return match.group(1)
+
+        raise SternConnectionError("Could not discover Stern login action")
+
+    async def _do_authenticate(self, session: aiohttp.ClientSession, login_action: str) -> bool:
         """Perform the actual authentication request."""
         # Headers required for Next.js server action
         headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
+            "User-Agent": _USER_AGENT,
             "Accept": "text/x-component",
             "Accept-Language": "en-US,en;q=0.5",
             "Referer": "https://insider.sternpinball.com/login",
-            "Next-Action": "9d2cf818afff9e2c69368771b521d93585a10433",
-            "Next-Router-State-Tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22login%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2Flogin%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D",
+            "Next-Action": login_action,
             "Content-Type": "text/plain;charset=UTF-8",
             "Origin": "https://insider.sternpinball.com",
         }
@@ -94,68 +175,69 @@ class SternInsiderConnectedAPI:
         # Login data sent as JSON array (not object)
         login_data = json.dumps([self._username, self._password])
 
-        try:
-            async with session.post(
-                API_LOGIN_URL,
-                headers=headers,
-                data=login_data,
-                allow_redirects=False,
-            ) as response:
-                # Extract token from cookies
-                token = None
-                cookies = response.headers.getall("Set-Cookie", [])
-                for cookie in cookies:
-                    if "spb-insider-token=" in cookie:
-                        # Extract token value
-                        match = re.search(r"spb-insider-token=([^;]+)", cookie)
-                        if match:
-                            token = match.group(1)
-                            break
+        async with session.post(
+            API_LOGIN_URL,
+            headers=headers,
+            data=login_data,
+            allow_redirects=False,
+        ) as response:
+            cookies = response.headers.getall("Set-Cookie", [])
+            token = self._extract_access_token(cookies)
+            auth_result = self._parse_auth_result(await response.text())
 
-                # Check response body for authentication status
-                response_text = await response.text()
-                authenticated = False
-                if '"authenticated"' in response_text:
-                    try:
-                        for line in response_text.split("\n"):
-                            if '"authenticated"' in line:
-                                json_match = re.search(r"\{.*\}", line)
-                                if json_match:
-                                    auth_result = json.loads(json_match.group(0))
-                                    authenticated = auth_result.get("authenticated", False)
-                                    break
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
+            _LOGGER.debug(
+                "Auth response: status=%s, authenticated=%s, has_token=%s, cookies_count=%d",
+                response.status,
+                auth_result.get("authenticated") if auth_result else None,
+                token is not None,
+                len(cookies),
+            )
 
-                _LOGGER.debug(
-                    "Auth response: status=%s, authenticated=%s, has_token=%s, cookies_count=%d",
-                    response.status, authenticated, token is not None, len(cookies)
+            if response.status == 401:
+                raise SternAuthenticationError("Invalid username or password")
+            if response.status == 403:
+                raise SternAuthenticationError("Account access denied")
+            if response.status != 200:
+                raise SternConnectionError(f"Stern login failed - status {response.status}")
+            if auth_result is None:
+                raise _StaleLoginActionError
+            if not auth_result.get("authenticated", False):
+                message = auth_result.get("message", "Invalid username or password")
+                raise SternAuthenticationError(str(message))
+            if token is None:
+                raise SternConnectionError(
+                    "Stern login succeeded without returning an access token"
                 )
 
-                if response.status == 200 and (authenticated or token):
-                    self._access_token = token
-                    self._cookies = cookies
-                    # Token expires in 30 minutes
-                    self._token_expiry = time.time() + 1800
+            self._access_token = token
+            self._cookies = cookies
+            self._token_expiry = time.time() + 1800
+            _LOGGER.info("Successfully authenticated with Stern API")
+            return True
 
-                    _LOGGER.info("Successfully authenticated with Stern API")
-                    return True
+    @staticmethod
+    def _extract_access_token(cookies: list[str]) -> str | None:
+        """Extract the access token from response cookies."""
+        for cookie in cookies:
+            if match := re.search(r"spb-insider-token=([^;]+)", cookie):
+                return match.group(1)
+        return None
 
-                if response.status == 401:
-                    raise SternAuthenticationError("Invalid username or password")
-                if response.status == 403:
-                    raise SternAuthenticationError("Account access denied")
-
-                _LOGGER.error(
-                    "Authentication failed - status=%s, authenticated=%s, has_token=%s",
-                    response.status, authenticated, token is not None
-                )
-                raise SternAuthenticationError(
-                    f"Authentication failed - status {response.status}, authenticated={authenticated}, has_token={token is not None}"
-                )
-
-        except aiohttp.ClientError as err:
-            raise SternConnectionError(f"Failed to connect to Stern API: {err}") from err
+    @staticmethod
+    def _parse_auth_result(response_text: str) -> dict[str, Any] | None:
+        """Extract the authentication result from a Next.js response."""
+        decoder = json.JSONDecoder()
+        for line in response_text.splitlines():
+            object_start = line.find("{")
+            if object_start == -1:
+                continue
+            try:
+                result, _ = decoder.raw_decode(line[object_start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(result, dict) and "authenticated" in result:
+                return result
+        return None
 
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid authentication token."""
@@ -165,7 +247,7 @@ class SternInsiderConnectedAPI:
     def _get_api_headers(self) -> dict[str, str]:
         """Get headers for API requests."""
         return {
-            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
+            "User-Agent": _USER_AGENT,
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.5",
             "Referer": "https://insider.sternpinball.com/",
@@ -198,9 +280,7 @@ class SternInsiderConnectedAPI:
                         method, url, headers=headers, **kwargs
                     ) as retry_response:
                         if retry_response.status in (401, 403):
-                            raise SternAuthenticationError(
-                                "Authentication failed after retry"
-                            )
+                            raise SternAuthenticationError("Authentication failed after retry")
                         retry_response.raise_for_status()
                         return await retry_response.json()
 
